@@ -1,0 +1,9 @@
+Cancellation Policy
+
+Orders can be cancelled free of charge at any time before they enter the "processing" state, which typically lasts up to 2 hours after the order is placed. Once an order moves to "processing" or has shipped, it can no longer be cancelled through self-service and must instead be handled as a return after delivery.
+
+When a customer requests cancellation of an order that has already shipped, support should not attempt to cancel it manually. Instead, the customer should be advised to refuse delivery (if still possible) or initiate a standard return once the package arrives, per the refund policy.
+
+If an order was successfully cancelled but the customer was still charged, this indicates the payment was captured before the cancellation was processed. In this case, a full refund should be issued immediately (see Payment Policy) - this is treated as a cancelled-order refund, not a standard return, so no waiting period applies.
+
+Subscription products can be cancelled at any time from the account dashboard and take effect at the end of the current billing cycle; partial-period refunds are not issued for subscription cancellations unless required by local consumer protection law.

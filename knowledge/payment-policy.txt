@@ -1,0 +1,11 @@
+Payment Policy
+
+We accept major credit and debit cards, PayPal, and store credit. Payment is authorized at checkout and captured when the order ships. For pre-orders, payment is captured 3 days before the estimated ship date.
+
+If a customer is charged twice for what should be a single order (a duplicate charge), this is almost always caused by a payment retry after a temporary network timeout. Support should verify both transaction IDs in the payment dashboard, confirm only one order was actually created, and refund the duplicate charge in full within 3 business days - no return or restocking process is needed since only one physical order exists.
+
+If a customer reports being charged for an order that does not appear in their order history, check for a pending authorization hold, which can appear as a charge on the customer's statement for up to 5 business days before either capturing or automatically releasing.
+
+Failed payments do not create an order. If a customer's card was declined but they believe they were charged, this is typically a temporary authorization hold from their bank, not an actual charge, and should clear automatically within 5-7 business days.
+
+Chargebacks and payment disputes should be escalated to the billing team rather than resolved directly by support, since they involve the card network's dispute process.
