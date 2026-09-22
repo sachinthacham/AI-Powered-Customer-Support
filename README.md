@@ -2,6 +2,16 @@
 
 **AI-powered customer support: tickets triaged by AI, uncertain cases escalated to humans, and policy questions answered from your own documents - with sources.**
 
+## Screenshots
+
+| Sign in | Tickets |
+|---|---|
+| ![Sign-in page](frontend/public/screenshots/login.png) | ![Ticket list with AI triage results](frontend/public/screenshots/tickets.png) |
+| **Knowledge base** | **Ask AI** |
+| ![Knowledge base with ingested policy documents](frontend/public/screenshots/knowledge-base.png) | ![Ask AI page with example questions](frontend/public/screenshots/ask-ai.png) |
+
+---
+
 ![.NET 8](https://img.shields.io/badge/.NET-8-512BD4) ![Next.js 16](https://img.shields.io/badge/Next.js-16-black) ![SQL Server](https://img.shields.io/badge/SQL%20Server-2022-CC2927) ![Qdrant](https://img.shields.io/badge/Qdrant-vector%20DB-DC244C) ![Docker](https://img.shields.io/badge/Docker-Compose-2496ED) ![Tests](https://img.shields.io/badge/tests-55%20passing-brightgreen)
 
 SupportIQ is a full-stack help-desk application for a customer support team. Agents manage tickets in a Next.js web app backed by an ASP.NET Core API, and the AI layer:
@@ -72,15 +82,7 @@ It's built as a portfolio project to show how AI fits into a conventional, produ
 
 ---
 
-## Screenshots
 
-| Sign in | Tickets |
-|---|---|
-| ![Sign-in page](frontend/public/screenshots/login.png) | ![Ticket list with AI triage results](frontend/public/screenshots/tickets.png) |
-| **Knowledge base** | **Ask AI** |
-| ![Knowledge base with ingested policy documents](frontend/public/screenshots/knowledge-base.png) | ![Ask AI page with example questions](frontend/public/screenshots/ask-ai.png) |
-
----
 
 ## Architecture
 
