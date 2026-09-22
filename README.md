@@ -1,448 +1,452 @@
 # SupportIQ
 
-**AI-powered customer support ticketing with retrieval-augmented, source-cited policy answers.**
+**AI-powered customer support: tickets triaged by AI, uncertain cases escalated to humans, and policy questions answered from your own documents - with sources.**
 
-A portfolio project demonstrating how AI capabilities (structured output, embeddings, RAG, confidence-based escalation) integrate into a conventional, production-oriented ASP.NET Core application - not a chatbot demo, but a support tool an engineering team could actually ship.
+![.NET 8](https://img.shields.io/badge/.NET-8-512BD4) ![Next.js 16](https://img.shields.io/badge/Next.js-16-black) ![SQL Server](https://img.shields.io/badge/SQL%20Server-2022-CC2927) ![Qdrant](https://img.shields.io/badge/Qdrant-vector%20DB-DC244C) ![Docker](https://img.shields.io/badge/Docker-Compose-2496ED) ![Tests](https://img.shields.io/badge/tests-55%20passing-brightgreen)
+
+SupportIQ is a full-stack help-desk application for a customer support team. Agents manage tickets in a Next.js web app backed by an ASP.NET Core API, and the AI layer:
+
+- **Triages tickets** - category, priority, sentiment, a one-line summary, tags, and a draft reply, returned as validated structured JSON in a single call.
+- **Escalates to a human** automatically when the AI isn't confident in its own analysis.
+- **Answers policy questions with RAG** - grounded only in the company knowledge base, citing the exact document passages used, and saying *"I don't know"* instead of guessing when nothing relevant exists.
+
+It's built as a portfolio project to show how AI fits into a conventional, production-oriented application: clean architecture, provider-agnostic AI, security, resilience, testing, and one-command Docker deployment.
 
 ---
 
-## Overview
+## Contents
 
-SupportIQ is a ticket management API for a customer support team. Agents create and manage tickets through a clean REST API (demonstrated via Swagger - no frontend in V1). On top of standard CRUD, the AI layer:
+- [Tech stack](#tech-stack)
+- [Features](#features)
+- [Screenshots](#screenshots)
+- [Architecture](#architecture)
+- [Folder structure](#folder-structure)
+- [Running locally](#running-locally)
+- [API reference](#api-reference)
+- [Testing](#testing)
+- [Design decisions](#design-decisions)
+- [Future improvements](#future-improvements)
 
-- **Classifies tickets** - category, priority, sentiment, a one-line summary, tags, and a draft reply, all in one structured call.
-- **Escalates automatically** when the AI isn't confident enough in its own classification.
-- **Answers policy questions** grounded in a company knowledge base via RAG, citing which document and chunk each answer came from - and admits when it doesn't know, rather than guessing.
+---
 
-## Key Features
+## Tech stack
 
-- Full ticket lifecycle: create, read, update, delete, assign, change status, escalate.
-- AI ticket analysis with **structured JSON output** (not prompt-and-hope text parsing).
-- Confidence-based escalation policy, tunable via configuration.
-- RAG pipeline over an ingested knowledge base: chunk → embed → store in Qdrant → retrieve → ground → cite.
-- JWT authentication and role-based authorization.
-- Centralized, typed error handling via RFC 7807 `ProblemDetails`.
-- Resilience (retry, circuit breaker, timeout) around every AI provider call.
-- Structured logging (Serilog) with AI latency tracked and no sensitive content logged.
-- Health checks for SQL Server and Qdrant.
-- Unit tests (mocked AI) and integration tests (real SQL Server via Testcontainers, faked AI/vector store).
-- One-command local run via Docker Compose.
+| Layer | Technologies |
+|---|---|
+| **Frontend** | Next.js 16 (App Router), React 19, TypeScript, Tailwind CSS 4 |
+| **Backend API** | .NET 8, ASP.NET Core Web API, MediatR 12 (CQRS), FluentValidation 11 |
+| **AI** | Any OpenAI-compatible provider via the official OpenAI .NET SDK - **Google Gemini** (free tier, default) or OpenAI. Structured outputs (strict JSON Schema) and embeddings |
+| **Vector search** | Qdrant (`Qdrant.Client`, cosine similarity) |
+| **Database** | SQL Server 2022, Entity Framework Core 8 (code-first migrations) |
+| **Auth & security** | JWT bearer tokens, BCrypt password hashing, httpOnly session cookies (backend-for-frontend pattern) |
+| **Resilience** | Polly 8 - retry with exponential backoff, circuit breaker, per-attempt timeout |
+| **Observability** | Serilog structured logging, health checks for SQL Server and Qdrant |
+| **API docs** | Swagger / OpenAPI (Swashbuckle) with JWT support |
+| **Testing** | xUnit, Moq, FluentAssertions, EF Core InMemory, Testcontainers (real SQL Server), ASP.NET Core `WebApplicationFactory` |
+| **DevOps** | Docker, Docker Compose (4 services), multi-stage images |
+
+---
+
+## Features
+
+### For support agents (web app)
+
+- **Ticket management** - create, search, filter (status / category / priority), paginate, assign to an agent, change status, escalate, delete.
+- **One-click AI analysis** - classifies the ticket, writes a summary and tags, drafts a reply, and shows a confidence meter.
+- **Draft replies** - regenerate a customer reply without re-running the full analysis; copy to clipboard.
+- **Automatic escalation** - when AI confidence is below 70%, the ticket is escalated for human review with the reason shown.
+- **Knowledge base** - upload policy documents (`.txt` / `.md`); each is chunked, embedded, and made searchable.
+- **Ask AI** - ask policy questions and get answers grounded in the knowledge base, with numbered citations and relevance scores for every source.
+- **Live system status** - the sidebar shows whether the database and vector store are healthy.
+
+### Under the hood
+
+- **Structured AI output** - the model must return JSON matching a strict schema generated from the domain enums; every value is validated before it's saved.
+- **Provider-agnostic AI** - business logic depends only on interfaces (`ITicketAiService`, `IEmbeddingService`, `IRagService`); switching OpenAI ↔ Gemini is configuration, not code.
+- **Hallucination guard** - RAG discards passages below a relevance threshold and skips the LLM entirely when nothing relevant is found.
+- **Cost control** - AI runs only on demand; re-uploading an unchanged document isn't re-embedded.
+- **Secure by default** - the JWT never reaches browser JavaScript; no secrets in source control; the app fails fast if required secrets are missing.
+- **Consistent errors** - every failure becomes an RFC 7807 `ProblemDetails` response with the right status code.
+- **Privacy-aware logging** - logs record IDs, timings, and scores, never customer emails or message contents.
+- **Seeded demo data** - two agents and seven realistic tickets are created on first run.
+
+---
+
+## Screenshots
+
+| Sign in | Tickets |
+|---|---|
+| ![Sign-in page](frontend/public/screenshots/login.png) | ![Ticket list with AI triage results](frontend/public/screenshots/tickets.png) |
+| **Knowledge base** | **Ask AI** |
+| ![Knowledge base with ingested policy documents](frontend/public/screenshots/knowledge-base.png) | ![Ask AI page with example questions](frontend/public/screenshots/ask-ai.png) |
+
+---
 
 ## Architecture
 
-Clean Architecture, four projects, strict inward dependencies:
-
-```
-SupportIQ.API            → Controllers, middleware, Program.cs composition root
-SupportIQ.Application     → Use cases (MediatR), DTOs, validators, AI abstractions & prompts
-SupportIQ.Domain          → Entities, enums, domain exceptions - zero dependencies
-SupportIQ.Infrastructure  → EF Core, OpenAI SDK, Qdrant.Client, JWT, BCrypt
-```
-
-`Domain` depends on nothing. `Application` depends only on `Domain` (plus EF Core's `DbSet<T>` type, a deliberate pragmatic exception - see below). `Infrastructure` implements `Application`'s interfaces. `API` wires everything together in `Program.cs` and never talks to EF Core, OpenAI, or Qdrant directly.
-
-This is a **modular monolith**, intentionally. One deployable, one database, clear internal seams - not microservices, which would be pure overhead at this scale.
-
-### Architecture Diagram
-
-```mermaid
-flowchart TD
-    Client["Client / Swagger UI"]
-    API["SupportIQ.API<br/>Controllers · Middleware · Auth"]
-    App["SupportIQ.Application<br/>MediatR handlers · Validators · Prompts"]
-    AIAbs["AI Abstractions<br/>ITicketAiService · IEmbeddingService · IRagService"]
-    Infra["SupportIQ.Infrastructure<br/>EF Core · OpenAI SDK · Qdrant.Client"]
-    Domain["SupportIQ.Domain<br/>SupportTicket · Enums · Rules"]
-    SQL[(SQL Server)]
-    Qdrant[(Qdrant)]
-    OpenAI[["OpenAI API"]]
-
-    Client --> API --> App
-    App --> Domain
-    App --> AIAbs
-    AIAbs -. implemented by .-> Infra
-    App --> Infra
-    Infra --> SQL
-    Infra --> Qdrant
-    Infra --> OpenAI
-```
-
-### Why `IApplicationDbContext` instead of one repository per table
-
-The Application layer defines `IApplicationDbContext` exposing `DbSet<T>` directly for `SupportAgent`, `TicketAnalysis`, `KnowledgeDocument`, and `AuditLog` - EF Core's `DbSet` already *is* a repository/unit-of-work over its table, so wrapping each in a near-identical interface (`IAgentRepository`, `IAuditLogRepository`, ...) would be indirection with no behavior behind it. `SupportTicket` gets a real, dedicated `ITicketRepository` because it *does* have non-trivial, repeated logic worth encapsulating - filtered/paged search, and consistent `Include`s for tags/agent/analysis history. This is the same trade-off Microsoft's own Clean Architecture reference template makes, and it's why Application takes a narrow dependency on `Microsoft.EntityFrameworkCore` (just for the `DbSet<T>` type) rather than a full repository-per-aggregate.
-
-## AI Integration
+### System overview
 
 ```mermaid
 flowchart LR
-    Ticket["SupportTicket"] --> Prompt["TicketAnalysisPrompt<br/>(system + user prompt)"]
-    Prompt --> Schema["JSON Schema<br/>(built from the actual enums)"]
-    Schema --> LLM["OpenAI Chat Completion<br/>response_format: json_schema, strict"]
-    LLM --> Parse["Deserialize + validate<br/>enum values, clamp confidence"]
-    Parse --> Policy{"Confidence policy"}
-    Policy -->|">= 0.85"| Accept["Apply analysis"]
-    Policy -->|"0.70 - 0.84"| Review["Apply analysis,<br/>flagged for review"]
-    Policy -->|"< 0.70"| Escalate["Apply analysis,<br/>ticket auto-escalated"]
+    Browser["Browser"]
+    Web["Next.js web app<br/>pages + BFF route handlers"]
+    API["ASP.NET Core API"]
+    SQL[(SQL Server)]
+    Qdrant[(Qdrant<br/>vector DB)]
+    LLM[["LLM provider<br/>Gemini / OpenAI"]]
+    Swagger["Swagger UI"]
+
+    Browser -- "httpOnly session cookie" --> Web
+    Web -- "Bearer JWT (server-to-server)" --> API
+    Swagger --> API
+    API --> SQL
+    API --> Qdrant
+    API --> LLM
 ```
 
-**Provider abstraction.** The Application layer depends only on `ITicketAiService`, `IEmbeddingService`, and `IRagService` (`SupportIQ.Application.Abstractions`) - never on the `OpenAI` NuGet package. Controllers call MediatR handlers, handlers call these interfaces, and `SupportIQ.Infrastructure.AI` provides the only OpenAI-aware implementations in the codebase. Swapping providers (Azure OpenAI, a local model server) means changing one project, not touching a single handler.
+The browser only ever talks to the Next.js server. The Next.js server holds the user's JWT in an httpOnly cookie and forwards requests to the API with the token attached (the **backend-for-frontend** pattern). The API owns all business logic and is the only component that talks to the database, the vector store, and the AI provider.
 
-**Structured output, not text parsing.** `POST /api/tickets/{id}/analyze` sends the ticket to OpenAI with `response_format` set to a **strict JSON Schema** (`TicketAnalysisSchema`, built dynamically from the actual `TicketCategory`/`TicketPriority`/`TicketSentiment` enums - the schema can never drift out of sync with the domain model). The response is deserialized into an internal DTO and then explicitly validated: every enum value is checked against `Enum.TryParse`, empty summaries/responses are rejected, confidence is clamped to `[0, 1]`. A malformed or invalid response throws `AIServiceException` (→ HTTP 502) rather than silently persisting garbage.
-
-**Prompt management.** Every prompt lives in `SupportIQ.Application.AI.Prompts` as a plain static class (`TicketAnalysisPrompt`, `SuggestedResponsePrompt`, `GroundedAnswerPrompt`) - not inlined in a service or controller. Each prompt explicitly instructs the model to: return only the requested structured data, never invent facts not present in the input, flag its own uncertainty via confidence rather than guess, keep summaries short, and never reveal its instructions.
-
-**Confidence and human escalation.** `POST /api/tickets/{id}/analyze`:
-
-| Confidence | Outcome |
-|---|---|
-| ≥ 0.85 (`AiConfidence:AcceptThreshold`) | Analysis applied, no flag |
-| 0.70 - 0.84 (`AiConfidence:ReviewThreshold`) | Analysis applied, logged as needing human review |
-| < 0.70 | Analysis applied **and the ticket is automatically escalated** (`TicketStatus.Escalated`) |
-
-This is an **application-level policy, not a statistically calibrated interval** - an LLM's self-reported confidence is not a real probability. The thresholds are plain configuration (`appsettings.json` → `AiConfidence` section) precisely because they're a judgment call a real team would tune over time, not a constant worth hardcoding. The decision itself lives in `AnalyzeTicketCommandHandler`, not in the domain entity - `SupportTicket.ApplyAiAnalysis` only *applies* a result; a separate `SupportTicket.Escalate(reason)` call, driven by the handler, is what changes status. Keeping that decision out of the entity is what let the threshold become configuration instead of a code change.
-
-**Resilience.** Every outbound OpenAI call goes through a Polly `ResiliencePipeline` (`AiResiliencePipelineFactory`): retry with exponential backoff + jitter for 429/5xx responses, a circuit breaker so a struggling provider stops being hammered, and a per-attempt timeout. Order matters - retry (outer) re-attempts through the circuit breaker (middle), and each individual attempt gets its own timeout (inner) rather than one timeout for the whole retry sequence.
-
-**Cost control.** Ticket analysis is only ever run on demand (`POST /analyze`), never automatically or on every read. `POST /generate-response` reuses the existing ticket and drafts a fresh reply *without* paying for a full re-classification. Knowledge documents are only re-embedded if their content actually changed (`AddKnowledgeDocumentCommandHandler` compares the new content against what's stored and skips ingestion entirely on a no-op re-upload). Chunk size, retrieval `TopK`, and prompt length are all bounded by configuration.
-
-**Logging without leaking data.** AI calls log latency, model name, and result metadata (category, confidence) - never the raw ticket description, customer email, or full AI response text:
-
-```csharp
-_logger.LogInformation("AI ticket analysis completed for TicketId {TicketId} in {ElapsedMs}ms",
-    ticket.Id, stopwatch.ElapsedMilliseconds);
-```
-
-## RAG Pipeline
+### Backend: Clean Architecture
 
 ```mermaid
 flowchart TD
-    subgraph Ingestion["Document ingestion - POST /api/knowledge/documents"]
-        Doc["Plain text content"] --> Chunk["TextChunker<br/>word-safe, overlapping chunks"]
-        Chunk --> Embed1["OpenAI Embeddings<br/>text-embedding-3-small"]
-        Embed1 --> Store["Qdrant<br/>vector + payload (doc id, title, chunk text)"]
-        Doc --> Meta["KnowledgeDocuments table<br/>(SQL Server metadata)"]
+    API["SupportIQ.API<br/>Controllers · Middleware · JWT auth"]
+    App["SupportIQ.Application<br/>MediatR handlers · Validators · Prompts · Interfaces"]
+    Domain["SupportIQ.Domain<br/>Entities · Enums · Business rules"]
+    Infra["SupportIQ.Infrastructure<br/>EF Core · OpenAI SDK · Qdrant · JWT · BCrypt"]
+
+    API --> App
+    App --> Domain
+    Infra -. implements interfaces of .-> App
+    API -. composes .-> Infra
+```
+
+| Project | Responsibility | Depends on |
+|---|---|---|
+| `SupportIQ.Domain` | `SupportTicket` aggregate, enums, business rules (e.g. closed tickets can't change) | nothing |
+| `SupportIQ.Application` | Use cases as MediatR commands/queries, validation, DTOs, AI interfaces, prompt templates | Domain |
+| `SupportIQ.Infrastructure` | EF Core persistence, OpenAI-compatible AI client, Qdrant, JWT, password hashing | Application, Domain |
+| `SupportIQ.API` | HTTP endpoints, exception → `ProblemDetails` middleware, auth, Swagger, composition root | Application, Infrastructure |
+
+This is a **modular monolith** on purpose: one deployable with clear internal boundaries, without the operational overhead of microservices.
+
+### AI ticket analysis flow
+
+```mermaid
+flowchart LR
+    Ticket["Ticket"] --> Prompt["Prompt template"]
+    Prompt --> LLM["LLM with strict<br/>JSON Schema output"]
+    LLM --> Validate["Validate enums,<br/>clamp confidence"]
+    Validate --> Policy{"Confidence"}
+    Policy -->|"≥ 85%"| Accept["Accepted"]
+    Policy -->|"70-84%"| Review["Accepted,<br/>flagged for review"]
+    Policy -->|"< 70%"| Escalate["Auto-escalated<br/>to a human"]
+```
+
+1. The ticket is sent to the LLM with a centralized prompt (`Application/AI/Prompts`) and a **strict JSON Schema** built from the actual C# enums, so the schema can never drift from the domain model.
+2. The response is parsed and **validated** - unknown categories, empty summaries, or out-of-range confidence are rejected as an `AIServiceException` (HTTP 502) instead of being saved.
+3. The confidence policy decides whether the result is accepted, flagged, or the ticket is escalated. The thresholds are configuration (`AiConfidence` section), because they're a business judgment - an LLM's self-reported confidence isn't a calibrated probability.
+4. The ticket is updated, an immutable `TicketAnalysis` history row and an `AuditLog` entry are written, and the result is returned.
+
+### RAG pipeline (Ask AI)
+
+```mermaid
+flowchart TD
+    subgraph Ingest["Uploading a document"]
+        Doc["Policy document"] --> Chunk["Split into overlapping,<br/>word-safe chunks"]
+        Chunk --> Embed1["Embed each chunk"]
+        Embed1 --> Store[("Qdrant")]
+        Doc --> Meta[("SQL Server<br/>document metadata")]
     end
 
-    subgraph Query["POST /api/ai/ask"]
-        Question["Agent's question"] --> Embed2["OpenAI Embeddings"]
-        Embed2 --> Search["Qdrant similarity search<br/>top K, cosine"]
-        Search --> Threshold{"Best score >=<br/>MinRelevanceScore?"}
-        Threshold -->|No| Fallback["'I don't have enough<br/>information...' + confidence 0.0"]
-        Threshold -->|Yes| Ground["GroundedAnswerPrompt<br/>(numbered context chunks)"]
-        Ground --> LLM["OpenAI Chat Completion"]
-        LLM --> Answer["Answer + confidence<br/>(from retrieval score) + sources"]
+    subgraph Ask["Asking a question"]
+        Q["Question"] --> Embed2["Embed question"]
+        Embed2 --> Search["Similarity search<br/>(top K)"]
+        Search --> Gate{"Any chunk above<br/>relevance threshold?"}
+        Gate -->|No| Fallback["'I don't have enough information'<br/>- LLM never called"]
+        Gate -->|Yes| Ground["Prompt: answer ONLY<br/>from these passages"]
+        Ground --> Answer["Answer + citations<br/>+ retrieval confidence"]
     end
 ```
 
-**Ingestion** (`AddKnowledgeDocumentCommandHandler`): text is split by `TextChunker` (`SupportIQ.Application.Common.TextProcessing`) into overlapping, word-boundary-safe chunks (default 800 chars, 100 overlap - both configurable). Each chunk is embedded via `IEmbeddingService` and upserted into Qdrant with a payload carrying the document id, title, chunk index, and the chunk text itself - enough to answer a search and cite a source without a second round-trip to SQL. Document *metadata* (file name, title, full content, chunk count) lives in the `KnowledgeDocuments` SQL table; the chunked text and vectors live only in Qdrant.
+- **Grounded answers only** - the LLM sees just the retrieved passages and is instructed to answer only from them and cite them (`[1]`, `[2]`, …).
+- **Relevance gate** - passages below `Rag:MinRelevanceScore` are dropped before the LLM sees them. The threshold is per embedding model: measured on the sample knowledge base with Gemini embeddings, relevant questions scored 0.65-0.75 and off-topic ones ≤ 0.55, so Gemini uses **0.60** (OpenAI default: 0.70).
+- **Honest confidence** - the reported confidence is the best vector-similarity score of the passages used, not a number the model makes up about itself.
 
-**Retrieval and grounding** (`RagService`): the question is embedded and searched against Qdrant for the top-K most similar chunks. Chunks scoring below `Rag:MinRelevanceScore` (default 0.70 cosine similarity) are discarded *before the LLM ever sees them*. If nothing clears that bar, the LLM is never called at all - the API returns a fixed, honest fallback answer with zero sources and zero confidence. This is a deliberate design choice: the system is built to say "I don't know" rather than let a language model improvise past what the knowledge base actually contains.
+### Web app authentication (BFF pattern)
 
-**Confidence is retrieval-derived, not model-reported.** `RagAnswer.Confidence` is the **maximum vector-similarity score** among the chunks actually used - not something the LLM is asked to self-assess. Asking an LLM "how confident are you" is even less reliable than a raw similarity score; the retrieval score is at least a concrete, reproducible number.
+- `POST /api/auth/login` (Next.js route) calls the API's login endpoint and stores the returned JWT in an **httpOnly, SameSite=Lax cookie** whose expiry matches the token's.
+- `/api/backend/[...path]` forwards every browser request to the API with `Authorization: Bearer <token>` added server-side. The token is never readable by JavaScript (an XSS bug can't steal it), and the API needs no CORS configuration.
+- `src/proxy.ts` redirects signed-out users to `/login`. That's a convenience check only; the API validates the JWT on every request, and an expired session sends the user back to sign in.
 
-**Source citations.** Every non-fallback answer returns the exact documents and chunk indices used:
+---
 
-```json
-{
-  "answer": "Customers can request a refund within 30 days of purchase if the item is unused...",
-  "confidence": 0.91,
-  "sources": [
-    { "document": "Refund Policy", "chunk": 0, "relevance": 0.91 }
-  ]
-}
-```
-
-## Ticket Analysis Flow
-
-1. `POST /api/tickets` - agent creates a ticket from the customer's report.
-2. `POST /api/tickets/{id}/analyze` - `AnalyzeTicketCommandHandler` loads the ticket, calls `ITicketAiService.AnalyzeTicketAsync`, validates the structured result, applies it to the ticket (`SupportTicket.ApplyAiAnalysis`), decides escalation from the confidence policy, records an immutable `TicketAnalysis` history row, writes an `AuditLog` entry, and returns the result.
-3. The ticket's `Category`/`Priority`/`Sentiment`/`Summary`/`Tags`/`SuggestedResponse`/`AiConfidence` are now visible on `GET /api/tickets/{id}` - and if confidence was too low, `Status` is `Escalated` with an `EscalationReason`.
-4. An agent can independently ask `POST /api/ai/ask` for grounded policy guidance (e.g. "what's our refund policy for cancelled orders?") while working the ticket.
-
-## Technology Stack
-
-| Concern | Choice |
-|---|---|
-| Runtime | .NET 8, ASP.NET Core Web API |
-| Persistence | EF Core 8 + SQL Server, code-first migrations |
-| CQRS / mediator | MediatR 12 |
-| Validation | FluentValidation, wired as a MediatR pipeline behavior |
-| AI provider | OpenAI SDK 2.x (chat completions with structured output, embeddings) |
-| Vector database | Qdrant (`Qdrant.Client`) |
-| Resilience | Polly 8 (`ResiliencePipeline`) |
-| Auth | JWT bearer (`Microsoft.AspNetCore.Authentication.JwtBearer`), BCrypt password hashing |
-| Logging | Serilog (console + rolling file), structured |
-| API docs | Swashbuckle / Swagger, with JWT auth wired into the UI |
-| Testing | xUnit, Moq, FluentAssertions, EF Core InMemory (unit), Testcontainers.MsSql (integration) |
-| Containers | Docker, Docker Compose (API + SQL Server + Qdrant) |
-
-All package versions were chosen as the latest stable release confirmed compatible with a `net8.0` target (see the individual `.csproj` files) - not blindly the newest major version where that would require .NET 9/10.
-
-## Project Structure
+## Folder structure
 
 ```
 SupportIQ/
-├── src/
+├── src/                                   Backend (.NET 8)
 │   ├── SupportIQ.API/
-│   │   ├── Controllers/        Tickets, Ai, Knowledge, Auth
-│   │   ├── Middleware/         ExceptionHandlingMiddleware (-> ProblemDetails)
-│   │   ├── Extensions/         HealthCheckJsonWriter
-│   │   ├── Services/           CurrentUserService (JWT claims -> ICurrentUserService)
-│   │   └── Program.cs          Composition root
+│   │   ├── Controllers/                   Tickets, Ai, Knowledge, Agents, Auth
+│   │   ├── Middleware/                    ExceptionHandlingMiddleware (exceptions → ProblemDetails)
+│   │   ├── Services/                      CurrentUserService (reads the agent from JWT claims)
+│   │   ├── Extensions/                    JSON health-check response writer
+│   │   └── Program.cs                     Composition root: DI, auth, Swagger, Serilog, health checks
 │   │
 │   ├── SupportIQ.Application/
-│   │   ├── Abstractions/       ITicketAiService, IEmbeddingService, IRagService, IVectorStore, ITicketRepository, IApplicationDbContext, ...
-│   │   ├── AI/                 TicketAnalysisResult, RagAnswer, Prompts/
-│   │   ├── Features/           Tickets/, Knowledge/, Ai/, Auth/ (MediatR commands+handlers+validators)
-│   │   ├── DTOs/                TicketDto, RagAnswerDto, KnowledgeDocumentDto, ...
-│   │   └── Common/              Behaviours/, Exceptions/, Options/, Mappings/, TextProcessing/
+│   │   ├── Abstractions/                  ITicketAiService, IEmbeddingService, IRagService, IVectorStore, ...
+│   │   ├── AI/Prompts/                    TicketAnalysisPrompt, SuggestedResponsePrompt, GroundedAnswerPrompt
+│   │   ├── Features/                      Tickets/, Knowledge/, Ai/, Agents/, Auth/ - commands, queries, handlers, validators
+│   │   ├── DTOs/                          API response shapes
+│   │   └── Common/                        Validation pipeline, exceptions, options, text chunker
 │   │
 │   ├── SupportIQ.Domain/
-│   │   ├── Entities/            SupportTicket, TicketTag, TicketAnalysis, SupportAgent, KnowledgeDocument, AuditLog
-│   │   ├── Enums/                TicketCategory, TicketPriority, TicketSentiment, TicketStatus, AgentRole
-│   │   └── Exceptions/           DomainException, InvalidTicketStateException
+│   │   ├── Entities/                      SupportTicket, TicketTag, TicketAnalysis, SupportAgent, KnowledgeDocument, AuditLog
+│   │   ├── Enums/                         TicketCategory, TicketPriority, TicketSentiment, TicketStatus, AgentRole
+│   │   └── Exceptions/                    Domain rule violations
 │   │
 │   └── SupportIQ.Infrastructure/
-│       ├── AI/                   OpenAiTicketAiService, OpenAiEmbeddingService, RagService, AiResiliencePipelineFactory
-│       ├── VectorStore/          QdrantVectorStore
-│       ├── Persistence/          SupportIqDbContext, Configurations/, Migrations/, Seed/, Repositories/
-│       ├── Identity/              JwtTokenService, BCryptPasswordHasher
-│       ├── Configuration/         AiOptions, QdrantOptions
+│       ├── AI/                            OpenAI-compatible ticket AI, embeddings, RAG service, Polly resilience pipeline
+│       ├── VectorStore/                   QdrantVectorStore
+│       ├── Persistence/                   DbContext, entity configurations, migrations, repository, seed data
+│       ├── Identity/                      JWT token service, BCrypt password hasher
 │       └── DependencyInjection.cs
 │
-├── tests/
-│   ├── SupportIQ.UnitTests/       Domain rules, handler logic (mocked AI, EF InMemory), validators
-│   └── SupportIQ.IntegrationTests/ Real SQL Server (Testcontainers), fake AI/vector store, full HTTP pipeline
+├── frontend/                              Web app (Next.js 16)
+│   ├── public/screenshots/                README screenshots
+│   └── src/
+│       ├── app/(app)/                     Signed-in pages: tickets, ticket detail, new ticket, knowledge, ask
+│       ├── app/login/                     Sign-in page
+│       ├── app/api/                       BFF routes: auth/login, auth/logout, health, backend/[...path]
+│       ├── components/                    UI primitives, badges, sidebar, safe markdown renderer
+│       ├── lib/                           Typed API client, DTO types, server-only session helpers
+│       └── proxy.ts                       Route guard
 │
-├── knowledge/                     Sample policy documents (refund, payment, shipping, cancellation)
-├── Dockerfile
-├── docker-compose.yml
-└── .env.example
+├── tests/
+│   ├── SupportIQ.UnitTests/               41 tests: domain rules, handlers (mocked AI), validators, chunker
+│   └── SupportIQ.IntegrationTests/        14 tests: full HTTP pipeline against real SQL Server (Testcontainers)
+│
+├── knowledge/                             Sample policy documents: refund, payment, shipping, cancellation
+├── Dockerfile                             API image
+├── docker-compose.yml                     Web app + API + SQL Server + Qdrant
+└── .env.example                           Configuration template (no real secrets)
 ```
 
-## Getting Started
+---
+
+## Running locally
 
 ### Prerequisites
 
-- [.NET 8 SDK](https://dotnet.microsoft.com/download)
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (for SQL Server + Qdrant, locally or via Compose)
-- An [OpenAI API key](https://platform.openai.com/api-keys) (optional to start the app; required for AI/RAG endpoints)
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) - required
+- An AI API key - the app starts without one, but AI features need it:
+  - **Google Gemini (free, no credit card):** create a key at [aistudio.google.com/apikey](https://aistudio.google.com/apikey)
+  - or **OpenAI (paid):** [platform.openai.com/api-keys](https://platform.openai.com/api-keys)
+- For running outside Docker (optional): [.NET 8 SDK](https://dotnet.microsoft.com/download) and [Node.js 22](https://nodejs.org/)
 
-### Option A - Docker Compose (recommended, one command)
+### Option A - Docker Compose (recommended)
+
+**1. Clone and configure**
 
 ```bash
+git clone <your-repo-url> SupportIQ
+cd SupportIQ
 cp .env.example .env
-# edit .env: set SQL_SA_PASSWORD, JWT_SECRET, and OPENAI_API_KEY
+```
 
+Open `.env` and set:
+
+| Setting | Value |
+|---|---|
+| `SQL_SA_PASSWORD` | Any strong password (upper + lower case, digit, symbol, 8+ chars) |
+| `JWT_SECRET` | A random string of at least 32 characters (e.g. `openssl rand -base64 32`) |
+| `AI_API_KEY` | Your Gemini (or OpenAI) key |
+
+The Gemini settings (`AI_BASE_URL`, `AI_MODEL`, `AI_EMBEDDING_MODEL`, `EMBEDDING_DIMENSIONS`, `RAG_MIN_RELEVANCE_SCORE`) are pre-filled in `.env.example`. To use OpenAI instead, use the commented OpenAI block in that file.
+
+**2. Start everything**
+
+```bash
 docker compose up --build
 ```
 
-This builds the API image, starts SQL Server and Qdrant, waits for SQL Server to report healthy, then starts the API - which applies EF Core migrations and seeds demo data automatically on startup. Swagger is at **http://localhost:8080/swagger**.
+The first build takes several minutes (it downloads .NET, Node, SQL Server, and Qdrant images). The API applies database migrations and seeds demo data automatically.
 
-### Option B - Run the API locally against Dockerized dependencies
+| Service | URL |
+|---|---|
+| **Web app** | **http://localhost:3200** |
+| API (Swagger) | http://localhost:5080/swagger |
+| Health check | http://localhost:5080/health |
 
-```bash
-docker run -d --name supportiq-sql -e ACCEPT_EULA=Y -e MSSQL_SA_PASSWORD=YourStrong!Passw0rd -p 1433:1433 mcr.microsoft.com/mssql/server:2022-latest
-docker run -d --name supportiq-qdrant -p 6333:6333 -p 6334:6334 qdrant/qdrant:latest
+**3. Sign in**
 
-export ConnectionStrings__DefaultConnection="Server=localhost,1433;Database=SupportIQ;User Id=sa;Password=YourStrong!Passw0rd;TrustServerCertificate=True;"
-export Jwt__Secret="a-random-secret-of-at-least-32-characters"
-export Ai__ApiKey="sk-your-openai-api-key"
+- Email: `admin@supportiq.dev`
+- Password: `Passw0rd!123`
 
-dotnet run --project src/SupportIQ.API
-```
+(A second demo agent, `agent@supportiq.dev`, uses the same password.)
 
-Swagger is at **http://localhost:5xxx/swagger** (the port `dotnet run` prints).
+**4. Try it out**
 
-### Logging in
+1. **Tickets** → open a seeded ticket → **Analyze with AI**.
+2. **Knowledge base** → upload the four files from the `knowledge/` folder (choose the file; the title fills in automatically).
+3. **Ask AI** → click an example question and check the cited sources.
 
-A default admin account is seeded automatically on first run:
-
-- **Email:** `admin@supportiq.dev`
-- **Password:** `Passw0rd!123`
-
-`POST /api/auth/login` with those credentials returns a JWT - click **Authorize** in Swagger and paste `Bearer <token>` to unlock every other endpoint. Seven realistic, unanalyzed sample tickets are seeded too, so `POST /analyze` has something to demonstrate immediately.
-
-### Loading the knowledge base
-
-The four sample policy documents in `knowledge/` are **not** auto-ingested (ingestion calls OpenAI embeddings, so it only runs when you ask it to). Upload them via Swagger:
+**Stopping**
 
 ```bash
-curl -X POST http://localhost:8080/api/knowledge/documents \
-  -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
-  -d '{"fileName":"refund-policy.txt","title":"Refund Policy","content":"<paste the file content>"}'
+docker compose down        # stop (data is kept)
+docker compose down -v     # stop and delete all data (database + vectors)
 ```
 
-Repeat for `payment-policy.txt`, `shipping-policy.txt`, and `cancellation-policy.txt`, then try `POST /api/ai/ask`.
+### Option B - Run the API and web app without Docker (for development)
 
-## Environment Variables
-
-None of these have real defaults committed to source control - see `.env.example`.
-
-| Variable | Maps to | Required | Notes |
-|---|---|---|---|
-| `ConnectionStrings__DefaultConnection` | `ConnectionStrings:DefaultConnection` | Yes | App fails fast at startup if missing |
-| `Jwt__Secret` | `Jwt:Secret` | Yes | ≥ 32 characters; app fails fast if missing/too short |
-| `Jwt__Issuer`, `Jwt__Audience` | `Jwt:Issuer`/`Jwt:Audience` | No | Default to `SupportIQ` / `SupportIQ.Client` |
-| `Ai__ApiKey` | `Ai:ApiKey` | For AI endpoints | App still starts without it; only AI/RAG calls return 502 |
-| `Ai__Model`, `Ai__EmbeddingModel` | `Ai:Model`/`Ai:EmbeddingModel` | No | Default to `gpt-4o-mini` / `text-embedding-3-small` |
-| `Qdrant__Host`, `Qdrant__Port` | `Qdrant:Host`/`Qdrant:Port` | No | Default to `localhost:6334` (gRPC) |
-| `AiConfidence__AcceptThreshold`, `AiConfidence__ReviewThreshold` | see confidence table above | No | Default `0.85` / `0.70` |
-| `Rag__TopK`, `Rag__MinRelevanceScore`, `Rag__ChunkSize`, `Rag__ChunkOverlap` | RAG tuning | No | Defaults `4` / `0.70` / `800` / `100` |
-
-ASP.NET Core's double-underscore convention (`Section__Key`) maps environment variables onto the same `IConfiguration` keys used in `appsettings.json`.
-
-## Docker Setup
+Keep SQL Server and Qdrant in Docker, and run the API and web app directly:
 
 ```bash
-docker compose up --build      # build + start API, SQL Server, Qdrant
-docker compose logs -f api     # tail API logs
-docker compose down            # stop everything
-docker compose down -v         # also delete SQL Server / Qdrant data volumes
+# 1. Databases only
+docker compose up -d sqlserver qdrant
+
+# 2. API (new terminal)
+export ConnectionStrings__DefaultConnection="Server=localhost,14333;Database=SupportIQ;User Id=sa;Password=<SQL_SA_PASSWORD>;TrustServerCertificate=True;"
+export Jwt__Secret="<a random secret of at least 32 characters>"
+export Ai__ApiKey="<your key>"
+export Ai__BaseUrl="https://generativelanguage.googleapis.com/v1beta/openai/"   # omit for OpenAI
+export Ai__Model="gemini-3.5-flash-lite"
+export Ai__EmbeddingModel="gemini-embedding-001"
+export Qdrant__Port="16334"
+export Qdrant__VectorSize="3072"
+export Rag__MinRelevanceScore="0.60"
+export ASPNETCORE_ENVIRONMENT="Development"
+dotnet run --project src/SupportIQ.API          # note the port it prints, e.g. 5xxx
+
+# 3. Web app (new terminal)
+cd frontend
+npm install
+API_BASE_URL=http://localhost:5xxx npm run dev -- -p 3200
 ```
 
-`docker-compose.yml` waits for SQL Server's healthcheck before starting the API, so there's no manual "wait and retry" step. Migrations and seed data are applied by the API itself on startup.
+On Windows PowerShell, set variables with `$env:NAME = "value"` instead of `export`.
 
-## Database Migrations
+### Configuration reference
 
-```bash
-# create a new migration after changing an entity or configuration
-dotnet ef migrations add <Name> --project src/SupportIQ.Infrastructure --startup-project src/SupportIQ.Infrastructure
+With Docker Compose, set these short names in `.env` (`docker-compose.yml` maps them onto the app settings):
 
-# apply migrations to whatever ConnectionStrings__DefaultConnection points at
-dotnet ef database update --project src/SupportIQ.Infrastructure --startup-project src/SupportIQ.Infrastructure
-```
+| `.env` variable | Default | Purpose |
+|---|---|---|
+| `SQL_SA_PASSWORD` | - (required) | SQL Server `sa` password |
+| `JWT_SECRET` | - (required) | JWT signing key, ≥ 32 characters |
+| `AI_API_KEY` | empty | AI provider key; AI endpoints return 502 without it |
+| `AI_BASE_URL` | empty (OpenAI) | OpenAI-compatible endpoint, e.g. Gemini's |
+| `AI_MODEL` | `gpt-4o-mini` | Chat model |
+| `AI_EMBEDDING_MODEL` | `text-embedding-3-small` | Embedding model |
+| `EMBEDDING_DIMENSIONS` | `1536` | Must match the embedding model (Gemini `gemini-embedding-001`: 3072) |
+| `RAG_MIN_RELEVANCE_SCORE` | `0.70` | RAG relevance gate (Gemini: 0.60) |
+| `FRONTEND_PORT` / `API_PORT` | `3200` / `5080` | Host ports |
+| `SQL_PORT` / `QDRANT_HTTP_PORT` / `QDRANT_GRPC_PORT` | `14333` / `16333` / `16334` | Host ports |
 
-`SupportIqDbContextFactory` (an `IDesignTimeDbContextFactory`) lets the `dotnet ef` CLI build the context without starting the whole API host - schema generation doesn't need a live database, so it falls back to a harmless placeholder connection string if `ConnectionStrings__DefaultConnection` isn't set in your shell. At runtime, the API applies pending migrations automatically on startup in the `Development` environment (see `Program.cs`) - a deliberate simplification for a demo project; a real production pipeline would run migrations as an explicit CI/CD step instead.
+When running the API directly, use ASP.NET Core's `Section__Key` names instead (e.g. `Ai__Model`, `Qdrant__VectorSize`, `Rag__MinRelevanceScore`, `AiConfidence__AcceptThreshold`). The committed `appsettings.json` contains no secrets, and the API refuses to start if the connection string or JWT secret is missing.
 
-## API Examples
+### Troubleshooting
 
-All endpoints except `/api/auth/login` and `/health` require `Authorization: Bearer <token>`.
+| Symptom | Cause | Fix |
+|---|---|---|
+| AI features show *"The AI provider failed…"* and the API logs show `429 Too Many Requests` | Free-tier quota for that model is used up | Change `AI_MODEL` in `.env` (e.g. between `gemini-3.5-flash` and `gemini-3.5-flash-lite`), then `docker compose up -d api` |
+| Same error with `503 Service Unavailable` in the logs | The provider's model is temporarily overloaded | Wait a few minutes or switch `AI_MODEL` as above |
+| `ports are not available` / `port is already allocated` on startup | Another app, or Windows Hyper-V/WSL, holds the port (check with `netsh interface ipv4 show excludedportrange protocol=tcp`) | Set a different `FRONTEND_PORT`, `API_PORT`, `SQL_PORT`, or `QDRANT_*_PORT` in `.env` |
+| Ask AI always says it doesn't have enough information | Knowledge base is empty, or the relevance threshold is too strict for your embedding model | Upload documents; check the `top score` in `docker compose logs api` and tune `RAG_MIN_RELEVANCE_SCORE` |
+| Errors about vector size after switching AI provider | Existing vectors were created with a different embedding size | `docker compose down -v`, then start again and re-upload documents |
 
-**Create a ticket**
+View API logs with `docker compose logs -f api`.
 
-```http
-POST /api/tickets
-{
-  "title": "Payment deducted but order cancelled",
-  "description": "My card was charged $50 but my order was cancelled. I still haven't received my refund.",
-  "customerEmail": "customer@example.com"
-}
-```
-→ `201 Created`, `Location: /api/tickets/{id}`
+---
 
-**Update status**
+## API reference
 
-```http
-PUT /api/tickets/{id}/status
-{ "status": "InProgress" }
-```
+Full interactive docs are at `/swagger`. Every endpoint except login and health requires `Authorization: Bearer <token>`.
 
-**Assign to an agent**
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/api/auth/login` | Sign in; returns a JWT |
+| `GET` | `/api/tickets` | Search tickets (`status`, `category`, `priority`, `assignedAgentId`, `page`, `pageSize`) |
+| `POST` | `/api/tickets` | Create a ticket |
+| `GET` / `PUT` / `DELETE` | `/api/tickets/{id}` | Get / update / delete a ticket |
+| `POST` | `/api/tickets/{id}/analyze` | Run AI analysis (auto-escalates on low confidence) |
+| `POST` | `/api/tickets/{id}/generate-response` | Draft a new customer reply |
+| `POST` | `/api/tickets/{id}/assign` | Assign to an agent |
+| `PUT` | `/api/tickets/{id}/status` | Change status |
+| `POST` | `/api/tickets/{id}/escalate` | Escalate manually with a reason |
+| `GET` | `/api/agents` | List support agents |
+| `GET` / `POST` | `/api/knowledge/documents` | List / ingest knowledge documents |
+| `DELETE` | `/api/knowledge/documents/{id}` | Delete a document and its vectors |
+| `POST` | `/api/ai/ask` | Ask a question answered by RAG with sources |
+| `POST` | `/api/ai/analyze-ticket` | Same as `/tickets/{id}/analyze`, with the id in the body |
+| `GET` | `/health` | SQL Server and Qdrant health |
 
-```http
-POST /api/tickets/{id}/assign
-{ "agentId": "..." }
-```
-
-**Escalate manually**
-
-```http
-POST /api/tickets/{id}/escalate
-{ "reason": "Customer requested a supervisor." }
-```
-
-## AI Example
-
-```http
-POST /api/tickets/{id}/analyze
-```
+**Example - AI analysis** (`POST /api/tickets/{id}/analyze`):
 
 ```json
 {
-  "ticketId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
-  "category": "Payment",
+  "category": "Refund",
   "priority": "High",
   "sentiment": "Frustrated",
-  "summary": "Customer was charged for a cancelled order and is waiting for a refund.",
-  "tags": ["payment", "refund", "cancelled-order"],
-  "suggestedResponse": "We're very sorry for the frustration...",
-  "confidence": 0.94,
+  "summary": "Customer has not received a refund two weeks after returning their headphones.",
+  "tags": ["refund", "return", "tracking"],
+  "suggestedResponse": "I'm very sorry your refund hasn't arrived yet...",
+  "confidence": 0.95,
   "escalated": false
 }
 ```
 
-If the model had returned `confidence: 0.55`, the response would show `"escalated": true` and `GET /api/tickets/{id}` would show `"status": "Escalated"` with an `escalationReason`.
-
-## RAG Example
-
-```http
-POST /api/ai/ask
-{ "question": "What is our refund policy for cancelled orders?" }
-```
+**Example - Ask AI** (`POST /api/ai/ask`):
 
 ```json
 {
-  "answer": "If an order was cancelled before it ships, a full refund is issued automatically within 24 hours...",
-  "confidence": 0.91,
-  "sources": [
-    { "document": "Refund Policy", "chunk": 0, "relevance": 0.91 }
-  ]
+  "answer": "According to [1], refunds are issued to the original payment method within 5 to 7 business days after the returned item is received and inspected.",
+  "confidence": 0.65,
+  "sources": [{ "document": "Refund Policy", "chunk": 0, "relevance": 0.65 }]
 }
 ```
 
-Asking something the knowledge base doesn't cover returns:
+Errors use RFC 7807 `ProblemDetails`: validation `422`, not found `404`, bad login `401`, invalid ticket state `409`, AI provider failure `502`, vector store unavailable `503`. Stack traces are never returned.
 
-```json
-{ "answer": "I don't have enough information in the knowledge base to answer this confidently.", "confidence": 0.0, "sources": [] }
-```
+---
 
 ## Testing
 
 ```bash
-dotnet test                                       # everything
-dotnet test tests/SupportIQ.UnitTests             # fast, no Docker required
-dotnet test tests/SupportIQ.IntegrationTests      # requires Docker (Testcontainers spins up real SQL Server)
+dotnet test                                    # all 55 tests
+dotnet test tests/SupportIQ.UnitTests          # 41 unit tests - fast, no Docker needed
+dotnet test tests/SupportIQ.IntegrationTests   # 14 integration tests - needs Docker
 ```
 
-**Unit tests** (`SupportIQ.UnitTests`) cover domain rules (ticket state transitions, tag replacement, closed-ticket guards), the confidence/escalation policy in `AnalyzeTicketCommandHandler` (high/medium/low confidence, exact-threshold boundary), the `TextChunker` algorithm, the MediatR validation pipeline, and knowledge-ingestion cost-control logic (skip-if-unchanged, re-embed-if-changed) - all with `ITicketAiService`/`IEmbeddingService`/`IVectorStore` mocked via Moq. **No test in this project ever calls a real AI provider.** `IApplicationDbContext`-dependent handlers use EF Core's InMemory provider as a lightweight test double rather than hand-mocking every `DbSet<T>`.
+- **Unit tests** cover domain rules, the confidence/escalation policy (including exact threshold boundaries), the text chunker, the validation pipeline, and knowledge-ingestion cost control, with the AI mocked. **No test ever calls a real AI provider.**
+- **Integration tests** boot the real API against a disposable SQL Server container (Testcontainers), so migrations, JWT auth, validation, and persistence all run for real. The AI and vector store are replaced by deterministic fakes; the fake vector store does real cosine-similarity math, so the RAG relevance gate is genuinely exercised.
 
-**Integration tests** (`SupportIQ.IntegrationTests`) boot the real API host (`WebApplicationFactory<Program>`) against a real, disposable SQL Server container (`Testcontainers.MsSql`) - so persistence, migrations, JWT auth, and FluentValidation all run for real. The AI provider and vector store are replaced with deterministic fakes (`FakeTicketAiService`, `FakeEmbeddingService`, `FakeRagService`) so the *pipeline* (HTTP → MediatR → EF Core → back out) is fully exercised without ever touching OpenAI or requiring a running Qdrant. `FakeEmbeddingService` uses a real (if crude) hashed bag-of-words projection so `FakeVectorStore`'s cosine-similarity search behaves like actual retrieval, not a hardcoded stub - the low-confidence "I don't know" fallback path is tested with genuine (if simplified) similarity math.
+Frontend checks:
 
-## Error Handling
+```bash
+cd frontend
+npm run lint
+npm run build      # includes TypeScript type checking
+```
 
-`ExceptionHandlingMiddleware` is the single place exceptions become HTTP responses, mapped to RFC 7807 `ProblemDetails`:
+---
 
-| Exception | Status |
-|---|---|
-| `SupportIQ.Application.Common.Exceptions.ValidationException` (FluentValidation failures) | 422 |
-| `NotFoundException` | 404 |
-| `UnauthorizedAccessException` (bad login) | 401 |
-| `InvalidTicketStateException` (e.g. editing a closed ticket) | 409 |
-| `AIServiceException` (provider failure or invalid AI output) | 502 |
-| `ExternalServiceException` (Qdrant unreachable) | 503 |
-| `ArgumentException` | 400 |
-| anything else | 500, with a generic message - stack traces are never returned to the caller |
+## Design decisions
 
-## Resilience
+- **Interfaces around the AI provider.** Handlers depend on `ITicketAiService` / `IEmbeddingService` / `IRagService`; only `Infrastructure/AI` knows about the OpenAI SDK. That's why moving from OpenAI to Gemini's free tier required configuration only.
+- **Validate AI output like user input.** Structured output reduces malformed responses but doesn't eliminate them, so every field is checked before anything is saved.
+- **Escalation policy in the application layer.** The domain entity only *applies* an analysis; the handler decides escalation from configurable thresholds, so the business can tune them without a code change.
+- **`IApplicationDbContext` instead of a repository per table.** EF Core's `DbSet` already is a repository; only `SupportTicket`, which has real query logic (filters, paging, includes), gets a dedicated `ITicketRepository`.
+- **Resilience order matters.** Retry (outer) → circuit breaker → per-attempt timeout (inner), so each retry gets a fresh timeout and a failing provider stops being hammered.
+- **Migrations on startup (Development only).** Keeps `docker compose up` one-step for a demo; a production pipeline would run migrations as a separate deployment step.
 
-- **AI calls**: retry (exponential backoff + jitter) → circuit breaker → per-attempt timeout, via Polly (`AiResiliencePipelineFactory`), applied identically to chat completions and embeddings.
-- **Cancellation**: every handler and service method accepts and forwards a `CancellationToken` end-to-end from the ASP.NET Core request.
-- **Malformed AI output**: caught at the `Infrastructure.AI` boundary and converted to `AIServiceException` - handlers never see partially-valid data.
-- **Unavailable dependencies**: SQL Server and Qdrant both have dedicated health checks (`/health`); Qdrant/SQL connection failures during a request surface as `ExternalServiceException` → 503, not an unhandled 500.
+---
 
-## Security
+## Future improvements
 
-- JWT bearer authentication on every endpoint except login and health; BCrypt (work factor 12) for password hashing.
-- No secrets in source control - `ConnectionStrings`, `Jwt:Secret`, and `Ai:ApiKey` are all empty in committed `appsettings*.json` and must come from environment variables (`.env` for Docker, real env vars or user-secrets for local `dotnet run`). The app **fails fast at startup** if the connection string or JWT secret is missing, rather than running in a silently broken state.
-- FluentValidation on every command/query, enforced by a MediatR pipeline behavior - handlers never re-validate what a validator already guarantees.
-- Structured logging deliberately omits customer email, ticket description/content, and full AI responses - only IDs, categories, counts, and durations are logged.
-- `dotnet-ef`'s design-time factory uses an inert placeholder connection string, never a real credential, so schema generation never requires (or risks leaking) production secrets.
-
-## Future Improvements
-
-- Real file upload + text extraction (PDF/DOCX) for knowledge ingestion, instead of plain-text JSON bodies.
-- A minimal frontend (the API is already fully usable via Swagger, but a real UI would demonstrate the ticket workflow more concretely).
-- Streaming AI responses (`IAsyncEnumerable`) for the suggested-response endpoint.
-- Multi-tenant support if this ever needed to serve more than one company's knowledge base.
-- An agent registration endpoint (today, agents are seeded; there's no self-service sign-up by design, since this is an internal tool).
+- Automatic fallback to a second AI model when the primary returns 429/503.
+- PDF/DOCX text extraction for knowledge uploads.
+- Streaming AI responses in the UI.
+- Showing the ticket's AI analysis history (already stored in `TicketAnalyses`) in the web app.
+- Role-based UI (admin-only actions) and agent self-service registration.
